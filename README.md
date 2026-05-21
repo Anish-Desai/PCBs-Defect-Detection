@@ -1,126 +1,134 @@
 # PCB Inspector
 
-An automated PCB (Printed Circuit Board) defect detection system that analyzes a panel image containing 10 PCB slots, extracts each slot individually, and runs a 3-stage AI inspection pipeline on every one.
+`PCB Inspector` is an automated defect inspection pipeline for printed circuit board (PCB) panel images. It processes a single full-panel image containing 10 PCB slots, detects and extracts each slot, then evaluates each slot through a three-stage AI inspection workflow.
 
 ---
 
-## How It Works
+## System Overview
 
-### Stage 1 — Slot Extraction (Crop Model)
-A YOLO-based crop model scans the full panel image and detects each individual PCB slot. Each detected region is cropped and auto-rotated to portrait orientation if needed.
+The system architecture is composed of two primary components:
 
-### Stage 2 — 3-Stage Inspection Pipeline (per slot)
+1. Slot extraction using a YOLO crop model
+2. Slot-level defect inspection using a cascading YOLO/CNN/YOLO pipeline
 
-Each extracted slot goes through three sequential stages:
+### Stage 1 — Slot Extraction
 
-```
-Panel Image
+A YOLO-based crop model detects each PCB slot in the panel image. Detected regions are cropped and normalized to portrait orientation before defect analysis.
+
+### Stage 2 — Slot-Level Inspection
+
+Each extracted slot is evaluated by the following pipeline:
+
+```text
+Panel image
     │
     ▼
-[Crop Model]  →  10 individual PCB images
+[Crop model] → 10 independent slot images
     │
     ▼
-[YOLO-1]  ──── defect found? ──→  DEFECTIVE  (stops here)
+[YOLO-1 initial scan] ─── defect detected ──→ DEFECTIVE
     │ no defect
     ▼
-[CNN]  ──── all OK? ──→  OK  (stops here)
-    │ CNN flags something
+[CNN classifier] ─── all OK ───→ OK
+    │ uncertain / suspicious
     ▼
-[YOLO-2 recheck]  ──── defect confirmed? ──→  DEFECTIVE
+[YOLO-2 recheck] ─── defect confirmed ──→ DEFECTIVE
     │ not confirmed
     ▼
 OK_WITH_WARNING
 ```
 
-| Stage | Model | Purpose |
-|---|---|---|
-| YOLO-1 | `yolo_model.pt` | Fast initial defect scan at conf=0.25 |
-| CNN | `cnn_model.keras` | Deep crop-level classification |
-| YOLO-2 | `yolo_model.pt` | Low-threshold recheck at conf=0.15 |
+| Stage  | Model             | Purpose                                                    |
+| ------ | ----------------- | ---------------------------------------------------------- |
+| YOLO-1 | `yolo_model.pt`   | Initial fast defect detection at confidence threshold 0.25 |
+| CNN    | `cnn_model.keras` | Deep classification of slot crops and suspicious regions   |
+| YOLO-2 | `yolo_model.pt`   | Low-threshold recheck at confidence threshold 0.15         |
 
-### Possible Outcomes
+### Output States
 
-| Status | Meaning |
-|---|---|
-| `OK` | No defects found by YOLO-1 or CNN |
-| `DEFECTIVE` | Defect confirmed by YOLO-1 or YOLO-2 |
-| `OK_WITH_WARNING` | CNN flagged something but YOLO-2 couldn't confirm |
-
----
-
-## Defect Classes
-
-### CNN Classes (10)
-| Label | Type |
-|---|---|
-| `Corrected_BR`, `Corrected_IC2`, `Corrected_R7`, `Corrected_iC1` | Non-defective |
-| `defected_BR!` | Defective bridge |
-| `miss_align_ic1`, `miss_aligned_ic2` | IC misalignment |
-| `missing_R7` | Missing resistor |
-| `shifted_R7`, `white_R7` | Shifted / discoloured resistor |
-
-### YOLO Classes (7)
-| Label | Type |
-|---|---|
-| `correct` | Non-defective |
-| `glue` | Glue contamination |
-| `missalign` | Component misalignment |
-| `missing` | Missing component |
-| `r_shift`, `shifted` | Component shift |
-| `upsidedown` | Component flipped |
+| Status            | Description                                                    |
+| ----------------- | -------------------------------------------------------------- |
+| `OK`              | No defects detected by YOLO-1, and CNN did not raise a warning |
+| `DEFECTIVE`       | A defect was confirmed by YOLO-1 or by the YOLO-2 recheck      |
+| `OK_WITH_WARNING` | CNN flagged a potential issue, but YOLO-2 did not confirm it   |
 
 ---
 
-## Project Structure
+## Defect Taxonomy
+
+### CNN classification labels (10)
+
+| Label              | Description                                |
+| ------------------ | ------------------------------------------ |
+| `Corrected_BR`     | Normal corrected bridge region             |
+| `Corrected_IC2`    | Normal corrected IC2 region                |
+| `Corrected_R7`     | Normal corrected resistor R7 region        |
+| `Corrected_iC1`    | Normal corrected IC1 region                |
+| `defected_BR!`     | Defective bridge present                   |
+| `miss_align_ic1`   | IC1 misalignment                           |
+| `miss_aligned_ic2` | IC2 misalignment                           |
+| `missing_R7`       | Missing resistor R7                        |
+| `shifted_R7`       | Resistor R7 shifted from expected position |
+| `white_R7`         | Resistor R7 discolored/white appearance    |
+
+### YOLO defect detection labels (7)
+
+| Label        | Description                     |
+| ------------ | ------------------------------- |
+| `correct`    | No defect detected              |
+| `glue`       | Glue contamination present      |
+| `missalign`  | Component misalignment detected |
+| `missing`    | Missing component detected      |
+| `r_shift`    | Component shift defect          |
+| `shifted`    | Shifted component detected      |
+| `upsidedown` | Component placed upside down    |
+
+---
+
+## Repository Layout
 
 ```
-├── data/                        # Sample PCB crop images
+├── data/                        # Example PCB crop images
 │   ├── pcb_bottom_left.jpg
 │   ├── pcb_bottom_right.jpg
 │   ├── pcb_center.jpg
 │   ├── pcb_top_left.jpg
 │   └── pcb_top_right.jpg
 │
-├── models/                      # Trained model files (not tracked in git)
-│   ├── cnn_model.keras          # Keras CNN classifier
+├── models/                      # External model artifacts (not tracked)
+│   ├── cnn_model.keras          # CNN inference model
 │   ├── crop_model.pt            # YOLO slot extraction model
 │   └── yolo_model.pt            # YOLO defect detection model
 │
 ├── src/
 │   ├── config/
-│   │   └── config.py            # Model paths, class names, thresholds
+│   │   └── config.py            # Model path definitions, class maps, thresholds
 │   │
 │   ├── data/
-│   │   └── preprocessing.py     # Image cropping and slot saving utilities
-│   │
-│   ├── models/
-│   │   ├── cnn_model.py         # CNN model loader + augmentation pipeline
-│   │   ├── crop_model.py        # Crop YOLO model loader + slot extractor
-│   │   ├── inference.py         # CNN and YOLO inference functions
-│   │   └── yolo_model.py        # Mounted YOLO model loader
+│   │   └── preprocessing.py     # Image loading, crop normalization, slot saving
 │   │
 │   ├── pipeline/
-│   │   └── analyzer.py          # analyze_pcb() and analyze_panel() pipeline
+│   │   └── analyzer.py          # Slot extraction and inspection pipeline logic
 │   │
 │   ├── utils/
-│   │   └── helpers.py           # Defect label helpers
+│   │   └── helpers.py           # Label mapping and inference helpers
 │   │
 │   ├── web/
-│   │   ├── annotate.py          # Bounding box drawing on slot images
-│   │   ├── app.py               # Flask web app + REST API
-│   │   └── pdf_report.py        # PDF report generation (reportlab)
+│   │   ├── annotate.py          # Bounding box rendering utilities
+│   │   ├── app.py               # Flask web application and API endpoints
+│   │   └── pdf_report.py        # PDF report assembly
 │   │
-│   ├── main.py                  # CLI entry point
-│   └── requirements.txt         # Python dependencies
+│   ├── main.py                  # CLI execution entry point
+│   └── requirements.txt         # Python dependency manifest
 │
 └── README.md
 ```
 
 ---
 
-## Setup
+## Setup Instructions
 
-### 1. Create and activate virtual environment
+### 1. Create and activate a Python virtual environment
 
 ```bash
 python -m venv venv
@@ -132,82 +140,72 @@ venv\Scripts\activate
 source venv/bin/activate
 ```
 
-### 2. Install dependencies
+### 2. Install Python dependencies
 
 ```bash
 pip install -r src/requirements.txt
 ```
 
-### 3. Add model files
+### 3. Place model artifacts
 
-Place the following files in the `models/` directory:
+Copy the trained models into the local `models/` folder:
 
-```
+```text
 models/cnn_model.keras
 models/crop_model.pt
 models/yolo_model.pt
 ```
 
-> These are not tracked in git. Obtain them from your team or training pipeline.
+> Model files are not included in the repository and must be supplied separately.
 
 ---
 
-## Running
+## Execution
 
-### Web App
+### Launch the web application
 
 ```bash
 python -m src.web.app
 ```
 
-Then open [http://localhost:5000](http://localhost:5000)
+Open the application at `http://localhost:5000`.
 
-### CLI
+### Run the CLI pipeline
 
 ```bash
 python -m src.main
 ```
 
-Runs the full panel pipeline on `data/test.jpg` and prints JSON results.
+This command executes the full panel analysis pipeline and prints the JSON result summary for the configured test image.
 
 ---
 
-## Web Interface
+## Web Interface Features
 
-### Upload & Analyze
 - Upload a panel image containing 10 PCB slots
-- Adjust YOLO-1 and YOLO-2 confidence thresholds via sliders (defaults: 0.25 / 0.15)
-- Click **Analyze Panel**
+- Adjust YOLO confidence thresholds for initial scan and recheck stages
+- View per-slot status cards with color-coded pass/fail indicators
+- Inspect detailed slot diagnostics in a modal view
+- Download individual slot PDF reports or a consolidated full-panel report
 
-### Results Grid
-- Each slot shown as a card with a color-coded status badge
-  - 🟢 Green — OK
-  - 🔴 Red — DEFECTIVE
-  - 🟡 Amber — OK_WITH_WARNING
-- Summary bar shows total / OK / defective / warning counts
+Status indicator semantics:
 
-### Slot Detail Modal (click any card)
-- Toggle between **Original** and **Annotated** image (bounding boxes drawn per detection)
-- Defect table showing which stage caught what, label, confidence, and bounding box
-- CNN region thumbnails with per-region classification
-- Raw JSON report
-- **Download PDF** button for that slot
-
-### PDF Reports
-- Per-slot PDF: click "Download PDF Report" inside any slot modal
-- Full panel PDF: click "⬇ Full PDF Report" in the summary bar
-- Each PDF includes annotated image, defect table, and all stage results
+- `OK` — slot passed automated inspection
+- `DEFECTIVE` — defect confirmed by the pipeline
+- `OK_WITH_WARNING` — suspicious slot requiring manual review
 
 ---
 
-## REST API
+## API Endpoints
 
 ### `POST /api/inspect`
-Analyze a panel image programmatically.
 
-**Request:** `multipart/form-data` with field `image`
+Submit a panel image for automated inspection.
 
-**Response:** JSON array of per-slot results
+- Request: `multipart/form-data` with form field `image`
+- Response: JSON array containing per-slot inference results
+
+Example response payload:
 
 ```json
 [
@@ -234,27 +232,32 @@ Analyze a panel image programmatically.
 ```
 
 ### `GET /api/health`
-Returns `{"status": "ok"}` — use for uptime checks.
+
+Returns service health status:
+
+```json
+{ "status": "ok" }
+```
 
 ---
 
-## Dependencies
+## Dependency Summary
 
-| Package | Purpose |
-|---|---|
-| `ultralytics` | YOLO inference (crop + defect models) |
-| `tensorflow` / `keras` | CNN model loading and inference |
-| `keras-cv` | Augmentation layers used in CNN pipeline |
-| `opencv-python` | Image reading, cropping, annotation |
-| `pillow` | Image conversion for base64 encoding |
-| `flask` | Web server and REST API |
-| `reportlab` | PDF report generation |
+| Package                | Role                                               |
+| ---------------------- | -------------------------------------------------- |
+| `ultralytics`          | YOLO model inference and detection pipelines       |
+| `tensorflow` / `keras` | CNN model loading and prediction                   |
+| `keras-cv`             | Data augmentation and preprocessing layers         |
+| `opencv-python`        | Image reading, cropping, and annotation operations |
+| `pillow`               | Image format conversion and encoding               |
+| `flask`                | Web application server and REST API layer          |
+| `reportlab`            | PDF report generation                              |
 
 ---
 
-## Notes
+## Implementation Notes
 
-- Model files are excluded from version control — never commit `.pt` or `.keras` files
-- The `venv/` directory is excluded — recreate it with the setup steps above
-- Crop model uses `conf=0.5` (matches original training/inference setup — do not change)
-- YOLO-1 default `conf=0.25`, YOLO-2 recheck default `conf=0.15` — adjustable via UI sliders
+- Model binaries are excluded from version control.
+- Virtual environments should not be committed; recreate with the provided setup instructions.
+- The crop model operates at `conf=0.5` to match the original training and inference configuration.
+- Default defect detection thresholds are `YOLO-1: 0.25` and `YOLO-2: 0.15`; these are adjustable through the UI.
